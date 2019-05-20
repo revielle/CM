@@ -1,0 +1,285 @@
+---
+title: "Assignment3"
+author: "RF"
+date: "3/6/2018"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#setwd
+setwd("C:/Users/Reka/Desktop/CS 4/R")
+#libraries
+library(tidyverse)
+library(rethinking)
+library(pacman)
+library(brms)
+#data
+data <- read.csv('Assignment3Data.csv')
+
+```
+
+## Multivariate linear models
+
+In this assignment you will investigate the relation between different aspects of IQ and symptom severity in ASD (as measured by ADOS). The assignment is meant to make you practice on linear models, multiple predictors and interactions.
+
+The data you will use is the outcome of the psychological testing of the children you analyzed in methods 3.
+Data: https://www.dropbox.com/s/hom2qnmp9hyfwmu/Assignment3Data.csv?dl=0
+The data consists of ChildID, gender, age, diagnosis (ASD), symptom severity (ADOS), several aspects of IQ (NonVerbal/Perceptual,Verbal,Social) and the visit at which the tests were administered. The questions should be answered by focusing on visit 1.
+
+The questions you will have to answer are:
+
+1. Assess the relation between symptom severity and IQ (focus on visit 1 and children with ASD) and report the model, a plot of the model, a couple of lines describing the quality of the model and interpreting the results. P.S. Should you scale? P.P.S. Don't forget to motivate your priors. P.P.P.S. At least one plot for results and a plot for quality of each model (here and in the next questions) would be appreciated.
+1.1. Verbal IQ and ADOS
+1.2. Non Verbal IQ and ADOS
+1.3. Social IQ and ADOS
+
+The models presented in this part are only looking at ASD children at visit 1. We decided to scale all variables for all models for multiple reasons: priors proved easier to set, to avoid spurrious relationship which might arise due to difference in the way the varialbes are measured, and for faster convergence and easier interpretability of the results. The priors used for the models were first the default value obtained through an in-built formula of the brms package (get_priors), which were then adjusted in a way that the priors are following more similar distribution to the original distribution of the scaled target variable. Even though the priors chosen dnorm(0,1)  alpha and dunif (0,1) for sigma, produced great overestimations of error too, they were able to replicate the distribution of the data obserebed therefore these priors were used then for the rest of the analysis (first plot)
+
+In order to examine the relationship between ADOS score and different IQ measures multiple simple linear bayesian models were constructed, using ADOS as the outcome variable in all models, and the different IQ measure as preidctors, each having its own model. Both the quadratic estimation and the MCMC method were used to estimate posterior distributions. All of the models show us a negative relationship between the iq measures and ados, meaning an increase in ADOS score would result in a decrease in IQ measures. As all variables are scaled, they have a mean of 0, so the results show us that alpha (ADOS of ASD kids) is 0 (its mean) and that the  effect sizes of different measures of IQ are negative (ranging from -.5 to -.7). The plots are presenting the results of the quadratic approximation. 
+
+
+```{r, include=FALSE}
+#filter 1 visit + ASD
+visit1 <- data %>% filter(Visit == 1 & ASD == 1)
+visit2 = dplyr::filter(data, Visit == 1)
+#mean(visit1$SocialIQ)
+
+visit1$ADOS <- scale(visit1$ADOS,center = T, scale = T) # results in a matrix
+visit1$NonVerbalIQ <- scale(visit1$NonVerbalIQ,center = T, scale = T)
+visit1$VerbalIQ <- scale(visit1$VerbalIQ,center = T, scale = T)
+visit1$SocialIQ <- scale(visit1$SocialIQ,center = T, scale = T)
+
+visit2$ADOS <- scale(visit2$ADOS,center = T, scale = T) # results in a matrix
+visit2$NonVerbalIQ <- scale(visit2$NonVerbalIQ,center = T, scale = T)
+visit2$VerbalIQ <- scale(visit2$VerbalIQ,center = T, scale = T)
+visit2$SocialIQ <- scale(visit2$SocialIQ,center = T, scale = T)
+
+#na
+visit2 <- visit2[complete.cases(visit2[,6]),]
+
+####prior and likelihood
+m0_IQ <- bf(ADOS ~ 1)
+prior = get_prior(m0_IQ, data = visit1, family = gaussian()) # we get a df of priors which need refining (as ) 
+prior$prior[1] = "normal( 0, 1)"
+prior$prior[2] = "normal( 0, 1)"
+
+#model with the priors only
+m0 <- brm(m0_IQ, visit1, family = gaussian,prior = prior, sample_prior = "only", chains = 1)
+#predictive prior checking
+#pp_check(m0) # the priors are predicting the data well enough to be adapted in our model
+
+#alternative model
+m1_IQ <- bf( ADOS ~ NonVerbalIQ)
+prior2 = get_prior(m1_IQ, data = visit1, family = gaussian())
+prior2$prior[2] = "normal(0, 1)"
+prior2$prior[3] = "normal(0, 1)"
+prior2$prior[4] = "normal(0, 1)"
+#m1 <- brm(m1_IQ, visit1, family = gaussian,prior = prior2, sample_prior = "only",chains = 1)
+
+#plot(marginal_effects(m1), points = TRUE)
+#pp_check(m1)#posterior check
+
+hist(visit1$ADOS)
+hist(rnorm(11,0,1.5))
+
+model <- rethinking::map(
+  alist(
+    ADOS ~ dnorm( mu , sigma ),
+    mu <- a + b*NonVerbalIQ,
+    a ~ dnorm( 0 , 1),
+    b ~ dnorm( 0 , 1),
+    sigma ~ dunif( 0 , 1)
+),
+data= visit1)
+
+
+
+options(scipen = 999)
+precis(model)
+vcov(model) #tells us how each parameter relates to every other parameter in the model
+cov2cor(vcov(model))# Each entry shows the correlation, bounded between ????1 and +1, for each pair of parameters.
+
+post <- extract.samples( model , n=1e4 )# extracting the posteriors
+plot( ADOS ~ NonVerbalIQ , data=visit1 )
+for ( i in 1:20 ) 
+  abline( a=post$a[i] , b=post$b[i], col=col.alpha("black",0.3) )
+
+
+
+model2 <- rethinking::map(
+  alist(
+    ADOS ~ dnorm( mu , sigma ),
+    mu <- a + b*VerbalIQ,
+    a ~ dnorm( 0 , 1),
+    b ~ dnorm( 0 , 1),
+    sigma ~ dunif( 0 , 1 )
+),
+data= visit1)
+
+
+precis(model2)
+post2 <- extract.samples( model2 , n=30 )# extracting the posteriors
+plot( VerbalIQ ~ ADOS , data=visit1 )
+for ( i in 1:30 ) 
+  abline( a=post2$a[i] , b=post2$b[i] , col=col.alpha("black",0.3) )
+
+model3 <- rethinking::map(
+  alist(
+    ADOS ~ dnorm( mu , sigma ),
+    mu <- a + b*SocialIQ,
+    a ~ dnorm( 0 , 1),
+    b ~ dnorm( 0 , 1),
+    sigma ~ dunif( 0 , 1 )
+),
+data= visit1)
+
+
+precis(model3)
+post3 <- extract.samples( model3 , n=300 )# extracting the posteriors
+plot( SocialIQ ~ ADOS , data=visit1 )
+for ( i in 1:20 ) 
+  abline( a=post3$a[i] , b=post3$b[i] , col=col.alpha("black",0.3) )
+
+```
+
+```{r, plots}
+pp_check(m0)
+
+plot( ADOS ~ NonVerbalIQ , data=visit1) 
+for ( i in 1:20 ) 
+  abline( a=post$a[i] , b=post$b[i], col=col.alpha("black",0.3) )
+
+plot( ADOS~VerbalIQ , data=visit1 )
+for ( i in 1:30 ) 
+  abline( a=post2$a[i] , b=post2$b[i] , col=col.alpha("black",0.3) )
+
+plot( ADOS~SocialIQ , data=visit1 )
+for ( i in 1:20 ) 
+  abline( a=post3$a[i] , b=post3$b[i] , col=col.alpha("black",0.3) )
+
+```
+
+
+2. Do the different aspects of IQ account for different portions of the variance in ADOS? 
+
+2.1. Does it make sense to have all IQ measures in the same model? First write a few lines answering the question and motivating your answer, including a discussion as to what happens when you put all of them in the same model. Then build a model following your answer. If your answer is "no", you are not free, you still have to answer: are there alternative ways of answering the question?
+2.2. Build the model, assess its quality, write a few lines interpreting the results.
+
+ 
+
+Social, Verbal and NonSocial Iq might not acount for different portions of variance in the ADOS scores so a model including all three variables in an interaction term as predictors might make sense if we are looking at a more general level of IQ, because then the estimates of the interaction term could be taken as estimate of how the general IQ level affects ADOS. As it would be impossible to make sense of the individual iq measures if we want to examine each one's relation to ASD, we should make separate models, as done above. To sum up if we are including all the measures of IQ in a model then we are looking at IQ as a whole and we cannot make any causal inferences about the different aspects (verbal,etc.) of IQ, collider bias arises as we are conditioning all IQ variables on the ADOS score. 
+
+Using the quadratic approximation to obtain a posterior distribution a bayesian multivariate linear model was built, with ADOS as the outcome variable, and the different IQ measure as predictors, both individually and in an interaction term. Looking at each of the measures individually we can see that an increase in ADOS would result in a decrease in them, but the interaction term points towards a totally different conclusion, suggesting an increase in ados comes with an increase in general IQ. The 89% interval shows that the prediction do cross zero in both way, with a relatively large sd (.12) and small beta (.04), so they cannot be seen as reliable also having a relatively small effect size.
+
+```{r, include=FALSE}
+model4 <- rethinking::map(
+  alist(
+    ADOS ~ dnorm( mu , sigma ),
+    mu <- a + b1*SocialIQ+b2*NonVerbalIQ+b3*VerbalIQ+b4*SocialIQ*NonVerbalIQ*VerbalIQ,
+    a ~ dnorm( 0 , 1),
+    b1 ~ dnorm( 0 , 1),
+    b2 ~ dnorm( 0 , 1),
+    b3 ~ dnorm( 0 , 1),
+    b4 ~ dnorm( 0 , 1),
+    sigma ~ dunif( 0 , 1 )
+),data= visit1)
+
+vcov(model4) #tells us how each parameter relates to every other parameter in the model
+cov2cor(vcov(model4))# Each entry shows the correlation, bounded between -1 and +1, for each pair of parameters. This shows us that the different measures of IQ are indeed correlated. 
+length(visit1$ADOS)
+
+precis(model4)
+post4 <- extract.samples( model4 , n=34 )# extracting the posteriors
+plot(visit1$ADOS~post4$b4 )
+for ( i in 1:30 ) 
+  abline( a=post4$a[i] , b=post4$b4[i] , col=col.alpha("black",0.3) )
+```
+
+
+```{r, include=T}
+precis(model4)
+```
+
+3. Let's now include also the TD children. Does it make sense to ask whether IQ and ADOS are related? Motivate your answer. In any case, if you wanted to build a model to answer that question, which model would you build? Run the model, assess its quality, write a few lines interpreting the results.
+
+TD children are going to have an ADOS score of 0, so from their perspective asking whether the two scores are related wouldn't make sense as it wouldn't give us much of an insight to the relationship of the scores.  
+
+If we wish to investigate the relationship between general IQ and ADOS a model similar to the previous one can be built with an interaction term of different iq measures. If we want to find out about the relationship between different IQ measures and ADOS score, separate models should be constructed for each measure, using ADOS as predictor. 
+The model including the interaction term has modified priors as the two groups have different level of variance, the sigma had to be modified and is now following a normal distribution of witha mean of 0 and sd of 12. The results tell us that the interaction has no effect with a beta of 0. Sigma is really high meaning many different regression lines are possible the model is very uncertain. The model could be improved by informing it about the different level of variation within the two groups
+
+```{r, include=FALSE}
+
+m05_IQ <- bf(ADOS~VerbalIQ + SocialIQ + NonVerbalIQ)
+prior4 = get_prior(m05_IQ, data = visit2, family = gaussian())
+prior4$prior[2] = "normal(0, 2)"
+prior4$prior[3] = "normal(0, 2)"
+prior4$prior[4] = "normal(0, 2)"
+prior4$prior[5] = "student_t(2, 0, 5)"
+prior4$prior[6] = "student_t(2, 0, 5)"
+#m5 <- brm(m05_IQ, visit2, family = gaussian,prior = prior3, sample_prior = "only", chains = 1)
+#plot(marginal_effects(m5), points = TRUE)
+#pp_check(m5)#posterior check
+
+
+model5 <- rethinking::map(
+  alist(
+    ADOS ~ dnorm( mu , sigma ),
+    mu <- a + b1*SocialIQ+b2*NonVerbalIQ+b3*VerbalIQ+b4*SocialIQ*NonVerbalIQ*VerbalIQ,
+    a ~ dnorm( 0 , 1),
+    b1 ~ dnorm( 0 , 1),
+    b2 ~ dnorm( 0 , 1),
+    b3 ~ dnorm( 0 , 1),
+    b4 ~ dnorm( 0 , 1),
+    sigma ~ dnorm( 0 , 15 )
+),data= visit2)
+
+vcov(model5) #tells us how each parameter relates to every other parameter in the model
+cov2cor(vcov(model5))# Each entry shows the correlation, bounded between -1 and +1, for each pair of parameters. This shows us that the different measures of IQ are indeed correlated. 
+length(visit2$ADOS)
+
+precis(model5)
+post5 <- extract.samples( model5 , n=71 )# extracting the posteriors
+
+plot(ADOS~VerbalIQ,visit2)
+for ( i in 1:30 ) 
+  abline( a=post5$a[i] , b=post5$b3[i] , col=col.alpha("black",0.3) )
+
+plot(ADOS~ NonVerbalIQ , data=visit2 )
+for ( i in 1:30 ) 
+  abline( a=post5$a[i] , b=post5$b2[i] , col=col.alpha("black",0.3) )
+
+plot(ADOS~SocialIQ, data=visit2 )
+for ( i in 1:30 ) 
+  abline( a=post5$a[i] , b=post5$b1[i] , col=col.alpha("black",0.3) )
+
+plot(visit2$ADOS~post5$b4 )
+for ( i in 1:30 ) 
+  abline( a=post5$a[i] , b=post5$b4[i] , col=col.alpha("black",0.3) )
+```
+
+```{r, include=T}
+precis(model5)
+```
+
+4. Let's discuss contents:
+4.1. You have three scores for IQ, do they show shared variance? Is that the same in TD and ASD? What does that tell us about IQ?
+
+The 3 different IQ scores show shared varience in both models (one with only ASD kids, and one with both ASD and TD kids). The model including ASD kids only shows greater covariance of the IQ scores, but as we are examining the relation of these scores to ADOS scores the greater variance is most likely due to the fact that, TD kids all had an ADOS score of 0 while ASD kids had varying ADOS scores.  
+The results presenting that these scores show a significant shared varience might be due to the fact that they have been derived from a questionaire which assings different weight to different questions regarding the aspects of IQ examined, and depending on these weights causes some or most of the variance in those measures, thus making thes measure interrelated with each other. It might tell us more about the way we try to quantify IQ but not necessarily IQ itself.
+
+```{r, include=TRUE}
+cov2cor(vcov(model4)) # covariation in model without TD
+cov2cor(vcov(model5)) # covariation in model including TD
+```
+
+4.2. You have explored the relation between IQ and ADOS. How do you explain that relation from a cognitive perspective? N.B. You can present alternative hypotheses.
+
+From a cognitive perspective looking at the relationship between ADOS score (which is reflecting the severity of ASD) and IQ we expected to see that the severity of the disorder negatively influences the different aspects of IQ, especially the social and verbal ones. A greater variance and lower scores on average were found for the ASD children. These findings resonate with what we know about the disorder 
+
+5. Bonus questions: Including measurement errors. 
+5.1. Let's assume that ADOS has a measurement error of 1. How would you model that in any of the previous models? 
+5.2. We know that IQ has an estimated measurement error of 2.12. How would you include that? 
+
+

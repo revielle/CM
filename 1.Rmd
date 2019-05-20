@@ -1,0 +1,292 @@
+---
+title: "Assignment 1."
+author: "Reka K."
+date: "12/2/2019"
+output:
+  html_document:
+#    theme: paper
+    highlight: zenburn
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = 'center')
+```
+
+```{r libraries}
+library(tidyverse)
+library(ggplot2)
+library(lme4)
+library(caret)
+library(Metrics)
+```
+
+## Load data
+
+```{r load data}
+## Set working directory to the relevant one on your computer
+setwd("C:/Users/Reka/Desktop/CS 4/R")
+
+Fixations <- read_csv('fixations2018_2019.csv')
+Saccades <- read_csv('saccades2018_2019.csv')
+
+# Make sure variables are of the right type
+Fixations <- Fixations %>%
+  mutate(
+    ParticipantID = as.factor(ParticipantID),
+    Year = as.factor(Year),
+    Task = as.factor(Task),
+    ParticipantGender = as.factor(ParticipantGender),
+    Item = as.factor(Item)
+  )
+
+Saccades <- Saccades %>%
+  mutate(
+    ParticipantID = as.factor(ParticipantID),
+    Direction = as.factor(Direction),
+    Year = as.factor(Year),
+    Task = as.factor(Task),
+    ParticipantGender = as.factor(ParticipantGender),
+    Item = as.factor(Item)
+  )
+#lme4 optimization bobyqa
+hist(Fixations$Duration)
+
+```
+
+```{r, filter, scale + missing values}
+#filter out Social Engagement
+Fixations$StartTime <- scale(Fixations$StartTime)
+sc <- filter(Fixations, !Task == "SocialEngagement")
+f <- filter(Fixations, Task == "SocialEngagement")
+
+sc2 <- filter(Saccades, !Task == "SocialEngagement")
+f2 <- filter(Saccades, Task == "SocialEngagement")
+
+#scale + remove NAs (remember to do this for cross validation)
+sc2$StartTime <- scale(sc2$StartTime)
+sc2 <- sc2[complete.cases(sc2[, 5]), ]
+sc2 <- sc2[complete.cases(sc2[, 8]), ]
+sc <- sc[complete.cases(sc[, 4]), ]
+
+```
+
+```{r, Visual search count}
+#duration of fixation
+m0 = glmer(Duration ~ Task+StartTime + (1|ParticipantID)+ (1|Item) , data = sc, family = gaussian(link = "log"),control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+summary(m0)
+
+f <- predict(m0, type = "response")
+a = sc$Duration
+rmse(a,f)
+
+#we do find a negative effect of task on fixation duration when going from counting to star search, we also find a positive effect of time on fixation duration.
+
+#amplitude ( the size of the saccade measured in degrees) is regarding the saccades, relating to the visual search
+
+m01 = glmer(Amplitude ~ Task*StartTime + (1+Task|ParticipantID)+(1+Task|Item),data = sc2, family = gaussian(link = "log"),control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+summary(m01)
+qqnorm(sc2$MeanVelocity)
+qqline(sc2$MeanVelocity)
+
+#we find significant effects of the interaction between task and time, on saccade amplitude, we find an increase in saccade amplitude when going from counting to searching for the star.
+
+f <- predict(m01, type = "response")
+a = sc2$Amplitude
+rmse(a,f)
+
+rmse(a,f)
+rmse(predict(m01))
+
+
+#m02 = lmerTest::lmer(MeanVelocity ~ Task*StartTime+(1+Task|ParticipantID), data = sc2)
+
+#m03 = glmer(MeanVelocity ~ Task*StartTime+(1+Task|ParticipantID), data = sc2,family = gaussian(link = "log"),control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+#mean velocity of saccades
+m04 = glmer(MeanVelocity ~ Task*StartTime+(1+Task|ParticipantID)+ (1|Item), data = sc2,family = gaussian(link = "log"),control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+summary(m04)
+# we likewise find a positive result of the effect of the interaction between task and starttime on the mean velocity of saccades when going from the counting task to the search task.
+
+f = predict(m04, type = "response")
+a <- sc2$MeanVelocity
+rmse(a,f)
+anova(m03,m04)
+
+summary(m01)
+summary(m02)
+summary(m04)
+MuMIn::r.squaredGLMM(m3)
+
+options(scipen = 9999)
+summary(m1)
+m1
+```
+
+```{r, social engagement task}
+#filter year
+fix = filter(Fixations, Year == "2018")
+sac = filter(Saccades, Year == "2018")
+
+vid = read_csv("logfilesSE.csv")
+vid$ostention = as.factor(substr(vid$Video,13,13))
+vid$gender = as.factor(substr(vid$Video,0,1))
+vid$direction = as.factor(substr(vid$Video,9,11))
+
+fixat = inner_join(fix,vid)
+saccad = inner_join(sac,vid)
+
+#pupil size 
+m3 = glmer(PupilSize ~ ostention*direction*StartTime + ParticipantGender*gender + (1+Trial|ParticipantID), data = fixat, family = gaussian(link = "log"),control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+summary(m3)
+# we made a model to test whether theres an interaction effect between ostention direction and time on pupil size, and additionally we added an interaction effect of participant gender and gender in the video, we don't find any effect of our first interaction, but we do find an effect of the interaction between participant gender and video gender, when going from female + female (our baseline(?)) to male + male, we find a decrease in pupil size. 
+
+# we also find an effect of going from video gender of female to male, we find an increase in pupilsize.
+#the biggest effect we find on pupil size is from time.
+
+f <- predict(m3, type = "response")
+a <- test.data$PupilSize
+rmse(a,f)
+
+
+#cross v m3 - social engagement so the error is regarding the pupil size
+a <- unique(fixat$ParticipantID)
+fold1 <- createFolds(a,k=4)
+fixat$ParticipantID <- as.numeric(as.factor(fixat$ParticipantID))
+
+n=1
+rmse_train <- 0
+rmse_test <- 0
+
+for (i in fold1){
+  train.data <- subset(fixat, ParticipantID %in% i)
+  test.data <- subset(fixat, !ParticipantID %in% i)
+  model <- glmer(PupilSize ~ ostention*direction*StartTime + ParticipantGender*gender + (1+Trial|ParticipantID), data = fixat, family = gaussian(link = "log"),control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+  rmse_train[n] <- rmse(predict(model,type = "response"),train.data$PupilSize)
+  rmse_test[n] <- rmse(predict(model,type = "response"),test.data$PupilSize)
+  n=n+1
+} # looping on the train data only and cross validating the complex model on that one with 3 slices
+
+hh <- mean(rmse_train)
+hhh = mean(rmse_test)
+hhhh = (hh+hhh)/2
+
+#cross v model 0-2 visual search
+
+b <- unique(sc$ParticipantID)
+fold2 <- createFolds(b,k=4)
+sc$ParticipantID <- as.numeric(as.factor(sc$ParticipantID))
+
+n=1
+rmse_train2 <- 0
+rmse_test2 <- 0
+
+for (i in fold2){
+  train.data <- subset(sc, ParticipantID %in% i)
+  test.data <- subset(sc, !ParticipantID %in% i)
+  model <- glmer(Duration ~ Task+StartTime + (1|ParticipantID)+ (1|Item) , data = sc, family = gaussian(link = "log"),control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+  rmse_train2[n] <- rmse(predict(model,type = "response"),train.data$Duration)
+  rmse_test2[n] <- rmse(predict(model,type = "response"),test.data$Duration)
+  n=n+1
+}
+v = mean(rmse_test2)
+w = mean(rmse_train2)
+vw = (v+w)/2
+
+
+c <- unique(sc2$ParticipantID)
+fold3 <- createFolds(unique(c),k=4)
+sc2$ParticipantID <- as.numeric(as.factor(sc2$ParticipantID))
+
+n=1
+rmse_train3 <- 0
+rmse_test3 <- 0
+
+
+for (i in fold3){
+  train.data <- subset(sc2, ParticipantID %in% i)
+  test.data <- subset(sc2, !ParticipantID %in% i)
+  model <- glmer(Amplitude ~ Task*StartTime + (1|Item),data = sc2, family = gaussian(link = "log"),control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+  rmse_train3[n] <- rmse(predict(model,type = "response"),train.data$Amplitude)
+  rmse_test3[n] <- rmse(predict(model, type = "response"),test.data$Amplitude)
+  n=n+1
+}
+
+v = mean(rmse_test3)
+w = mean(rmse_train3)
+vw = (v+w)/2
+
+d <- unique(sc2$ParticipantID)
+fold4 <- createFolds(unique(c),k=4)
+sc2$ParticipantID <- as.numeric(as.factor(sc2$ParticipantID))
+
+n=1
+rmse_train4 <- 0
+rmse_test4 <- 0
+
+
+for (i in fold4){
+  train.data <- subset(sc2, ParticipantID %in% i)
+  test.data <- subset(sc2, !ParticipantID %in% i)
+  model <- glmer(MeanVelocity ~ Task*StartTime+(1+Task|ParticipantID)+ (1|Item), data = sc2,family = gaussian(link = "log"),control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+  rmse_train4[n] <- rmse(predict(model,type = "response"),train.data$MeanVelocity)
+  rmse_test4[n] <- rmse(predict(model, type = "response"),test.data$MeanVelocity)
+  n=n+1
+}
+
+v = mean(rmse_test4)
+w = mean(rmse_train4)
+vw = (v+w)/2
+```
+
+```{r, plots}
+#adding predicted values of pupilsize to data set
+Predicted_df = predict(m3,type = "response")
+fixat$predicted = Predicted_df
+
+#vidng plots for pupil size over time in Social Engagement for each condition facet wrapped by Participant Gender
+ggplot(fixat, aes(x= StartTime, y= predicted, color = gender))+
+  geom_smooth(method = "glm")+
+  facet_wrap(~ParticipantGender+Video)+
+  labs(title= "Participant Gender", y = "Pupil Size predicted", x = "Time (scaled)", color = "Video Gender")
+
+ggplot(fixat, aes(x= StartTime, y= predicted, color = ostention))+
+  geom_smooth(method = "glm")+
+  facet_wrap(~ParticipantGender + direction+gender)+
+  labs(title= "Participant Gender", y = "Pupil Size predicted", x = "Time (scaled)", color = "Ostention")
+
+ggplot(fixat, aes(x= StartTime, y= predicted, color = direction))+
+  geom_smooth(method = "glm")+
+  facet_wrap(~ParticipantGender+ParticipantID)+
+  labs(title= "Participant Gender", y = "Pupil Size predicted", x = "Time (scaled)", color = "Direction")
+
+#vidng plots for visual Search experiment
+sc2$amp_predicted = predict(m01,type = "response")
+
+#amplitude of saccade
+ggplot(sc2, aes(x= StartTime, y= amp_predicted, color = Item))+
+  geom_smooth()+
+  facet_wrap(~Task)+
+  labs(title= "Task", y = "Amplitude_pred", x = "Time (scaled)", color = "Item")
+
+sc$duration_predicted = predict(m0,type = "response")
+
+
+#Duration of fixation (predicted) 
+ggplot(sc, aes(x= StartTime, y= duration_predicted, color = Item))+
+  geom_smooth()+
+  facet_wrap(~Task)+
+  labs(title= "Task", y = "duration_predicted", x = "Time (scaled)", color = "Item")
+
+sc2$velo_predicted = predict(m04,type = "response")
+#velo_predicted
+ggplot(sc2, aes(x= StartTime, y= velo_predicted, color = Item))+
+  geom_smooth()+
+  facet_wrap(~Task)+
+  labs(title= "Task", y = "velocity_predicted", x = "Time (scaled)", color = "Item")
+
+
+```

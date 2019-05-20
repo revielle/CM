@@ -1,0 +1,537 @@
+---
+title: "Assignment 4 - Applying meta-analytic priors"
+author: "Riccardo Fusaroli"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Assignment 4
+
+In this assignment we do the following:
+- we reproduce the meta-analysis of pitch SD from last semester in a Bayesian framework
+- we reproduce the pitch SD in schizophrenia analysis from last semester using both a conservative and a meta-analytic prior
+- we assess the difference in model quality and estimates using the two priors.
+
+The questions you need to answer are: What are the consequences of using a meta-analytic prior? Evaluate the models with conservative and meta-analytic priors. Discuss the effects on estimates. Discuss the effects on model quality. Discuss the role that meta-analytic priors should have in scientific practice. Should we systematically use them? Do they have drawbacks? Should we use them to complement more conservative approaches? How does the use of meta-analytic priors you suggest reflect the skeptical and cumulative nature of science?
+
+### Step by step suggestions
+
+Step 1: Reproduce the meta-analysis of pitch sd from previous studies of voice in schizophrenia
+- the data is available as Assignment4MetaData.xlsx
+- Effect size (cohen's d), sd and variance are already calculated (you're welcome!)
+- Since we're only interested in getting a meta-analytic effect size, let's take a shortcut and use bromance magic (brms): https://vuorre.netlify.com/post/2016/09/29/meta-analysis-is-a-special-case-of-bayesian-multilevel-modeling/
+
+```{r, setwd, data, libraries}
+#setwd
+setwd("C:/Users/Reka/Desktop/CS 4/R")
+
+#loaddata
+##option1
+data <- readxl::read_xlsx("meta.xlsx")
+data2 <-  readxl::read_xlsx("pitch.xlsx")
+##option2
+library(readxl)
+data <- read_excel("meta.xlsx")
+
+#loadpackages
+library(metafor)
+library(lme4)
+library(brms)
+library(tidyverse)
+library(brmstools)
+library(rethinking)
+library(ggplot2)
+```
+
+```{r, m}
+ma_out <- rma(data = data, yi = MeanES, sei = VarianceES, slab = data$StudyID)
+summary(ma_out)# meta analytic effect size and se (which gives the prior for some next model?)
+
+data2 <- data %>% rename(yi = MeanES,sei = VarianceES)
+
+brm_out <- brm(
+  yi | se(sei) ~ 1 + (1 | StudyID), 
+  prior = set_prior("uniform(0, 10)", class = "sd"),
+  data = data2, 
+  cores = 4
+)
+brm_out
+
+avg_es <- as.data.frame(brm_out, pars = "b_")[,1]
+cat( (sum(avg_es > 0.3) / length(avg_es))*100, "%")
+```
+
+Step 2: Prepare the pitch SD data from last year
+- the data is available as Assignment4PitchData.csv (thanks Celine)
+- Also, let's standardize the data, so that they are compatible with our meta-analytic prior (Cohen's d is measured in SDs).
+- Is there any structure in the dataset that we should account for with random effects? 
+there is structure, random effects using id  and study nr as random intercepts
+
+How would you implement that? Or, if you don't know how to do bayesian random effects, is there anything we would need to simplify in the dataset?
+
+```{r}
+data_pitch = read_excel("Assignment4PitchDatav2.xlsx")
+data_pitch$PitchSD <- scale(data_pitch$PitchSD)
+
+#there is structure, random effects using id  and study nr as random intercepts
+
+data3 = select(data_pitch, ID, PitchSD, diagnosis,studynr,trial)
+data3 = as.data.frame(data3)
+pairs(data3$PitchSD~data3$diagnosis)
+
+set.seed(5)
+
+model <- rethinking::map2stan(
+  alist(
+    PitchSD ~ dnorm( mu , sigma ),
+    mu <- a + a[ID]*sigmaid + b*diagnosis,
+    a[ID] ~ dnorm(0,1),
+    a ~ dnorm(0 , 1 ),
+    b ~ dnorm( 0 , 1),
+    sigmaid ~ dnorm( 0 , 1) & T[0, ],
+    sigma ~ dnorm( 0 , 3)
+  ),control = list(adapt_delta = 0.99),warmup = 1000,iter = 5000,chains = 4,cores=4,data= data3)
+
+rethinking::precis(model ,depth = 2)
+rethinking::precis(model)
+
+set.seed(2)
+
+model_simple <- rethinking::map2stan(
+  alist(
+    PitchSD ~ dnorm( mu , sigma ),
+    mu <- a + aid[ID]*sigmaid + astudy[studynr]*sigmastudy+b1*diagnosis,
+    aid[ID] ~ dnorm(0,1),
+    astudy[studynr] ~ dnorm(0,1),
+    a ~ dnorm(0 , 1),
+    b1 ~ dnorm( 0 , 1),
+    sigmaid ~ dnorm(0,1) & T[0, ] ,
+    sigmastudy ~ dnorm(0,1) & T[0, ],
+    sigma ~ dnorm( 0 , 5) 
+  ),control = list(adapt_delta = 0.99),warmup = 1000, iter = 5000,chains = 4, cores = 4,data = data3)
+
+model_simple <- rethinking::map2stan(
+  alist(
+    PitchSD ~ dnorm( mu , sigma ),
+    mu <- a + aid[ID]*sigmaid + astudy[studynr]*sigmastudy+ ast[trial/studynr]*sigmast+b1*diagnosis,
+    aid[ID] ~ dnorm(0,1),
+    astudy[studynr] ~ dnorm(0,1),
+    ast[trial/studynr] ~ dnorm(0,1),
+    a ~ dnorm(0 , 1),
+    b1 ~ dnorm( 0 , 1),
+    sigmaid ~ dnorm(0,1) & T[0, ] ,
+    sigmastudy ~ dnorm(0,1) & T[0, ],
+    sigmast ~ dnorm(0,1) & T[0, ],
+    sigma ~ dnorm( 0 , 5) 
+  ),control = list(adapt_delta = 0.99),warmup = 1000, iter = 5000,chains = 4, cores = 4,data = data3)
+
+rethinking::precis(model_simple, depth = 2)
+rethinking::precis(model_simple)
+compare(model, model_simple)
+
+
+model_meta_simple <- rethinking::map2stan(
+  alist(
+    PitchSD ~ dnorm( mu , sigma ),
+    mu <- a + a[ID]*sigmaid +b1*diagnosis,
+    a[ID] ~ dnorm(0, 1),
+    a ~ dnorm(0 , 1),
+    b1 ~ dnorm( -0.62 , 0.30),
+    sigma ~ dnorm( 0 , 5),
+    sigmaid~dnorm(0,1)
+  ),control = list(adapt_delta = 0.99),chains = 2, cores = 2,data = data3)
+
+#rethinking::precis(model_simple2, depth = 2)
+#rethinking::precis(model_simple2)
+
+
+
+model_meta <- rethinking::map2stan(
+  alist(
+    PitchSD ~ dnorm( mu , sigma ),
+    mu <- a + aid[ID]*sigmaid + astudy[studynr]*sigmastudy+b1*diagnosis,
+    aid[ID] ~ dnorm(0,1),
+    astudy[studynr] ~ dnorm(0,1),
+    a ~ dnorm(0 , 1),
+    b1 ~ dnorm( -0.62 , 0.30),
+    sigmaid~dnorm(0,1) & T[0, ] ,
+    sigmastudy ~ dnorm(0,1) & T[0, ],
+    sigma ~ dnorm( 0 , 5)
+  ),control = list(adapt_delta = 0.99),warmup = 1000,iter = 5000,chains = 4, cores = 4,data = data3)
+
+rethinking::precis(model_meta, depth = 2)
+rethinking::precis(model_meta)
+compare(model_simple,model_meta)
+
+model_meta2 <- rethinking::map2stan(
+  alist(
+    PitchSD ~ dnorm( mu , sigma ),
+    mu <- a + a[ID]*sigmaid +b1*diagnosis,
+    a[ID] ~ dnorm(0,1),
+    a ~ dnorm(0 , 1),
+    b1 ~ dnorm( -0.62 , 0.27),
+    sigmaid~dnorm(0,1) & T[0,],
+    sigma ~ dnorm( 0 , 5)
+  ),control = list(adapt_delta = 0.99),warmup = 1000,iter = 5000,chains = 4, cores = 4,data = data3)
+
+```
+
+```{r, compare}
+rethinking::compare(model_simple2,model_meta)
+compare(model,model_simple,model_meta_simple, model_meta)
+precis(model_meta2,depth = 2)
+precis(model_meta2)
+
+dens(data3$PitchSD)
+why <- extract.samples(model_meta,n=1000)
+w <- data.frame(why)
+mu = why$a+why$b1
+dens(mu)
+mean(mu)
+length(post$b1)
+
+
+#exploring the posterior of the meta model (not the best model)
+post <- extract.samples(model_meta)
+sim_tanks <- rnorm( 800 , mu , post$sigma)
+dens( sim_tanks )
+plot(precis(model_simple,depth = 2))
+tracerplot(model_meta)
+
+
+total_a1 <- sapply( 1:3 , function(x) post$a  + post$astudy[,x])
+total_a <- sapply( 1:85 , function(x) total_a1 + post$aid[,x] )
+mu = sapply(1:4000,function (x) post$a[x] + post$b1[x]*data3$diagnosis)
+mu_schizo = sapply(1:85,function (x) post$a[x] + post$b1[x]*1)
+mu_norm = sapply(1:85,function (x) post$a[x] + post$b1[x]*0)
+hist(mu_schizo)
+hist(mu_norm)
+sim_schizo <- rnorm( 800 , mu_schizo , post$sigma)
+mean(sim_schizo)
+mean(sim_norm)
+hist(sim_schizo)
+sim_norm <- rnorm( 800 , mu_norm , post$sigma)
+hist(sim_norm)
+t.test(sim_norm,sim_schizo)
+plot(density(sim_norm),col = rangi2)
+lines(density(sim_schizo))
+length(post$a)
+plot(density(mu))
+hm = round( apply(mu,2,mean) , 2 )
+hist(hm)
+min(mu)
+
+options(scipen = 99)
+gaz = rnorm(1:100,-0.60,.30)
+mean(gaz)
+
+plot(PitchSD ~ diagnosis,xlim = c(0,1),ylim = c(-1,2),data3)
+
+for ( i in 1:50 ) 
+  abline( a=post$a[i] , b=gaz[i], col=col.alpha("black",0.3) )
+
+for ( i in 1:50 ) 
+  abline( a=post$a[i] , b=post$b[i], col=col.alpha("black",0.3) )
+
+```
+
+```{r, pp}
+#ppcheck in rethinking
+
+plot( NULL , xlim=c(-3,4) , ylim=c(0,1) ,xlab="pitchsd" , ylab="Density" )
+for ( i in 1:100 )
+  curve( dnorm(x,mu[i],post$sigma[i]) , add=TRUE , col=col.alpha("black",0.2) )
+  lines(density(data3$PitchSD))
+  
+#ppcheck in rethinking schizo/norm
+
+plot( NULL , xlim=c(-3,4) , ylim=c(0,1.1) ,xlab="pitchsd" , ylab="Density" )
+for ( i in 1:100 )
+  curve( dnorm(x,mu_norm[i],post$sigma[i]) , add=TRUE , col=col.alpha("black",0.2) )
+  lines(density(data3$PitchSD))  
+
+
+sim_pitch <- rnorm( 8000 , why$a , why$sigma )
+dens(sim_pitch)
+
+
+dens( post$sigmastudy , xlab="sigma" , xlim=c(0,1), ylim = c(0,10) )
+dens( post$sigmaid , col=rangi2 , lwd=2 , add=TRUE )
+text( 0.45 , 9 , "ID" , col=rangi2 )
+text( 0.15 , 2 , "Study" )
+
+#Posterior distributions of the standard deviations of varying intercepts by ID (blue) and
+#studynr (black).
+#the reason why adding study nr as a varying effect didn't change much is visible from the graph, the sds of studynr are very close to 0 show little variance, while the sds for the ids shows that there is greater variance coming from this random effect.
+```
+
+Step 3: Build a regression model predicting Pitch SD from Diagnosis.
+- how is the outcome distributed? (likelihood function)
+- how are the parameters of the likelihood distribution distributed? Which predictors should they be conditioned on?
+- use a skeptical/conservative prior for the effects of diagnosis. Remember you'll need to motivate it.
+- Describe and plot the estimates. Evaluate model quality
+
+
+Step 4: Now re-run the model with the meta-analytic prior
+- Describe and plot the estimates. Evaluate model quality
+
+
+Step 5: Compare the models
+- Plot priors and posteriors of the diagnosis effect in both models
+- Compare posteriors between the two models
+- Compare their relative distance from truth (WAIC)
+- Discuss how they compare and whether any of them is best.
+
+```{r}
+
+first <- bf(PitchSD ~ diagnosis  +(1|ID+trial/studynr))
+prior = get_prior(first,data3, family = gaussian())
+prior2=prior
+
+prior$prior[2] = "normal(0, 1)"
+prior$prior[3] = "normal(0, 1)"
+prior$prior[4] = "normal(0, 1)"
+prior$prior[6] = "normal(0, 1)"
+prior$prior[8] = "normal(0, 1)"
+prior$prior[10] = "normal(0, 1)"
+prior$prior[11] = "normal(0, 5)"
+
+prior2$prior[2] = "normal(-0.62, 0.27)"
+
+brm_out2 <- brm(PitchSD ~ diagnosis  +(1|ID+trial/studynr), # Outcome as a function of the predictors as in lme4. 
+               data=data3, # Define the data
+               family=gaussian(), # Define the family. 
+               prior = prior,
+               sample_prior = T,
+               control = list(adapt_delta = 0.99),
+               iter = 5000, warmup = 2000, cores = 4,
+               file = "brm_cons")
+brm_out2 <- readRDS("brm_cons.rds", refhook = NULL)
+
+brm_out3 <- brm(PitchSD ~ diagnosis  +(1|ID+trial/studynr), # Outcome as a function of the predictors as in lme4. 
+               data=data3, # Define the data
+               family=gaussian(), # Define the family. 
+               prior = prior,
+               sample_prior = "only",
+               control = list(adapt_delta = 0.99),
+               iter = 5000, warmup = 2000, cores = 4,
+               file = "brm_conscheck")
+brm_out3 <- readRDS("brm_conscheck.rds", refhook = NULL)
+
+brm_out_meta <- brm(PitchSD ~ 1 + diagnosis  +(1|ID+trial/studynr), # Outcome as a function of the predictors as in lme4. 
+               data=data3, # Define the data
+               family=gaussian(), # Define the family. 
+               prior = prior2,
+               sample_prior = T,
+               control = list(adapt_delta = 0.99),
+               iter = 5000, warmup = 2000, cores = 4,
+               file = "brm_meta")
+brm_out_meta <- readRDS("brm_meta.rds", refhook = NULL)
+
+brm_out_meta2 <- brm(PitchSD ~ 1 + diagnosis  +(1|ID) + (1|trial/studynr), # Outcome as a function of the predictors as in lme4. 
+               data=data3, # Define the data
+               family=gaussian(), # Define the family. 
+               prior = prior2,
+               sample_prior = "only",
+               control = list(adapt_delta = 0.99),
+               iter = 5000, warmup = 2000, cores = 4,
+               file = "brm_metappcheck") #saving as file
+brm_out_meta2 <- readRDS("brm_metappcheck.rds", refhook = NULL)
+```
+
+```{r}
+library(brms)
+summary(brm_out2)
+summary(brm_out3)
+
+plot(brm_out2)
+plot(marginal_effects(brm_out2))
+pp_check(brm_out2)
+pairs(brm_out2)
+pp_check(brm_out3)
+
+summary(brm_out_meta)
+plot(brm_out_meta)
+plot(marginal_effects(brm_out_meta))
+pp_check(brm_out_meta)
+
+summary(brm_out_meta2)
+plot(brm_out_meta2)
+plot(marginal_effects(brm_out_meta2))
+pp_check(brm_out_meta2)
+
+pp_check(brm_out_meta2, nsamples = 100, type = "stat_grouped",group = "trial:studynr")
+pp_check(brm_out2 ,nsamples = 100, type = "stat_grouped",group = "ID")
+pp_check(brm_out_meta2, type = "loo_pit_overlay")
+
+
+model_meta213 <- rethinking::map2stan(
+  alist(
+    PitchSD ~ dnorm( mu , sigma ),
+    mu <- 1 + aid[ID]*sigmaid + astudy[studynr]*sigmastudy,
+    aid[ID] ~ dnorm(0,1),
+    astudy[studynr] ~ dnorm(0,1),
+    sigmaid~dnorm(0,1) & T[0, ] ,
+    sigmastudy ~ dnorm(0,1) & T[0, ],
+    sigma ~ dnorm( 0 , 5)
+  ),control = list(adapt_delta = 0.99),warmup = 1000,iter = 5000,chains = 4, cores = 4,data = data3)
+
+```
+
+```{r}
+#ppcheck in rethinking
+
+post <- extract.samples(model_meta213)
+h = data.frame(post)
+a <- sapply(1:85, function(i) 1 +post$aid[i]*post$sigmaid[i]+post$astudy[i]*post$sigmastudy[i])
+
+plot( NULL , xlim=c(-3,4) , ylim=c(0,1.1) ,xlab="pitchsd" , ylab="Density" )
+for ( i in 1:100 )
+  curve( dnorm(x,a[i],post$sigma[i]) , add=TRUE , col=col.alpha("black",0.2) )
+  lines(density(data3$PitchSD))
+
+model_meta2133 <- rethinking::map2stan(
+  alist(
+    PitchSD ~ dnorm( mu , sigma ),
+    mu <- 1 ,
+    sigma ~ dnorm( 0 , 5)
+  ),control = list(adapt_delta = 0.99),warmup = 1000,iter = 5000,chains = 4, cores = 4,data = data3)
+
+post2 <- extract.samples(model_meta2133)
+h = data.frame(post2)
+
+plot( NULL , xlim=c(-3,4) , ylim=c(0,1.1) ,xlab="pitchsd" , ylab="Density" )
+for ( i in 1:100 )
+  curve( dnorm(x,-0.5,post2$sigma[i]) , add=TRUE , col=col.alpha("black",0.2) )
+  lines(density(data3$PitchSD))
+  
+  #extracting criterion 
+detach("rethinking", unload=TRUE)
+library(brms)
+meta_waic <- add_criterion(brm_out_meta, "waic")
+scep_waic <- add_criterion(brm_out2, "waic")
+#comparing WAIC
+comp_score <- loo_compare(meta_waic, scep_waic, criterion = "waic")
+print(comp_score, simplify = F)
+
+devtools::install_github("mvuorre/brmstools")
+
+#sampling prior & posterior from meta
+prior_samp <- prior_samples(brm_out_meta) 
+post_samp <- posterior_samples(brm_out_meta)
+
+prior_samp2 <- prior_samples(brm_out2) 
+post_samp2 <- posterior_samples(brm_out2)
+```
+
+```{r}
+p1 <- ggplot() +
+  geom_density(data = prior_samp, aes(x = b), fill = "red", alpha = 0.3)+
+  geom_density(data = post_samp, aes(x = b_diagnosis), fill = "blue", alpha = 0.3)+
+  xlab("effect of diagnosis") + 
+  labs(title = "difference between priors", 
+       subtitle = "meta prior",
+       caption = "red = prior\n blue = posterior")+
+  theme_classic()
+
+
+p2 <- ggplot() +
+  geom_density(data = prior_samp2, aes(x = b), fill = "red", alpha = 0.3)+
+  geom_density(data = post_samp2, aes(x = b_diagnosis), fill = "blue", alpha = 0.3)+
+  xlab("effect of diagnosis") + 
+  labs(title = "",subtitle = "conservative prior",
+       caption = "red = prior\n blue = posterior")+
+  theme_classic()
+plot_grid(p1,p2)
+
+```
+
+```{r}
+library(cowplot)
+prior_samp2
+
+d_pred2 = distinct(data3, diagnosis,studynr,trial)
+meta_avg2 = fitted(brm_out_meta, re_formula = NA, newdata = d_pred, summary = FALSE)
+
+meta_avg3 <- as.data.frame(meta_avg2) %>%
+  gather() %>%
+  mutate(diagnosis = ifelse(key == "V1", 0, 1))
+
+meta_avg_norm <- meta_avg3 %>%
+  filter(diagnosis == "0") 
+colnames(meta_avg_norm)[colnames(meta_avg_norm)=="value"] <- "value0"
+
+meta_avg_sz <- meta_avg3 %>%
+  filter(diagnosis == "1") 
+colnames(meta_avg_sz)[colnames(meta_avg_sz)=="value"] <- "value1"
+
+
+meta_aeff <- cbind.data.frame(meta_avg_norm, meta_avg_sz) 
+meta_aeff = plyr::mutate(meta_aeff,"effect" = value1 - value0)
+
+cons_avg = fitted(brm_out2, re_formula = NA, newdata = d_pred, summary = FALSE)
+
+cons_avg2 <- as.data.frame(meta_avg) %>%
+  gather() %>%
+  mutate(diagnosis = ifelse(key == "V1", 0, 1))
+
+cons_avg_norm <- cons_avg2 %>%
+  filter(diagnosis == "0") 
+colnames(cons_avg_norm)[colnames(cons_avg_norm)=="value"] <- "value0"
+
+cons_avg_sz <- cons_avg2 %>%
+  filter(diagnosis == "1") 
+colnames(cons_avg_sz)[colnames(cons_avg_sz)=="value"] <- "value1"
+
+
+cons_aeff <- cbind.data.frame(cons_avg_norm, cons_avg_sz) 
+cons_aeff = plyr::mutate(cons_aeff,"effect" = value1 - value0)
+
+```
+
+```{r}
+plot(density(meta_aeff$value0,from = -.5, to = .5),col="red", main = "simulated groups")
+lines(density(meta_aeff$value1),col= "yellow")
+
+plot(density(meta_aeff$effect),col="red", main = "comparing effect sizes")
+lines(density(cons_aeff$effect+0.001),col= "yellow")
+
+
+vec = as.vector(data3$PitchSD)
+vec2 = posterior_predict(brm_out2, nsamples = 100,draws=1)
+vec3 = posterior_predict(brm_out_meta2, nsamples = 100,draws=1)
+vec4 = posterior_predict(brm_out_meta, nsamples = 100,draws=1)
+vec5 = posterior_predict(brm_out3, nsamples = 100,draws=1)
+bayesplot::ppc_dens_overlay(y = vec, yrep = vec4)
+
+```
+Step 6: Prepare a nice write up of the analysis and answer the questions at the top.
+
+Optional step 7: how skeptical should a prior be?
+- Try different levels of skepticism and compare them using WAIC.
+
+Optional step 8: Include other predictors
+- Do age, gender and education improve the model?
+- Should they be main effects or interactions?
+
+Optional step 9: Bromance magic.
+- explore the bromance code below including random effects (by default with weakly informative priors)
+- learn how to change the prior
+- explore effects of trial, age, gender, including the appropriate random slopes
+- compare the models you created using WAIC and posterior predictive check (pp_check())
+
+
+```{r}
+
+brm_out <- brm(PitchSD ~ 1 + Diagnosis  +(1|ID_unique/Study), # Outcome as a function of the predictors as in lme4. 
+               data=Data, # Define the data
+               family=gaussian(), # Define the family. 
+               iter = 5000, warmup = 2000, cores = 4)
+summary(brm_out1)
+plot(brm_out1)
+
+```
+
