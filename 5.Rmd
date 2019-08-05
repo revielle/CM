@@ -1,0 +1,132 @@
+---
+title: "5"
+author: "Réka Keresztényi"
+date: "July 15, 2019"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 
+
+```{r, 1st look, include=FALSE }
+#the probability of being born as citizen A
+#parameters
+prob_a<- .61 #% of A
+N <- 10524 #total population
+
+#simulating data where p is greater than the probability of A
+data <- c()
+for(i in 1:N){
+  data[i] <- runif(1, min=0, max=1) < prob_a 
+}
+
+data <- as.numeric(data)
+data
+mean(data) #posterior
+sum(data) 
+
+#prior probability
+sum(rbinom(n=1, size=N, prob=.61)) /N 
+
+#simulate:
+#set.seed(111)
+#sum(rbinom(n=100000, size=100, prob=.61)) / (100000*100) 
+#hist(rbinom(n=100000, size=100, prob=.61))
+```
+
+```{r, unifprior, include=FALSE}
+n_samples <- 1e+05 #observations 5443660
+
+n_trial <- 100 #trials
+
+#probability of A with a uniform prior representing our uncertainty
+rate <- runif(n = n_samples, min = 0.0, max = 0.61) #8.5
+
+n_a <- rbinom(n = n_samples, size = n_trial, prob = rate)
+
+#posterior probability
+sum(n_a) / (1e+05*100) 
+
+#probability of a
+hist(n_a) 
+#uncertainty
+hist(rate) 
+
+#probability of 50+ As
+#sum(as.numeric(n_a >= 50)) / n_samples 
+```
+
+##
+
+```{r}
+#population of x cities with more than 1% citizens A.
+popul <- c(53.9, 74.5, 3.4, 22.4, 2.7, 29.6, 76.7, 57.4, 60.7, 9.3, 14.5 )
+
+#Define grid
+g <- expand.grid(mu = seq(0, 100, length.out = 100), 
+                    sigma = seq(0.1, 50, length.out = 100))
+
+#Defining and calculating the prior density for each parameter combination
+g$mu_prior <- dnorm(g$mu, mean = 100, sd = 100)
+g$sigma_prior <- dunif(g$sigma, min = 0.1, max = 50)
+g$prior <- g$mu_prior * g$sigma_prior
+
+#Calculating the likelihood for each parameter combination
+for(i in 1:nrow(g)) {
+  likelihoods <- dnorm(popul, g$mu[i], g$sigma[i])
+  g$likelihood[i] <- prod(likelihoods)
+}
+g$probability <- g$likelihood * g$prior
+g$probability <- g$probability / sum(g$probability)
+
+plot(probability ~ mu*sigma, data=g)
+
+head(g)
+samp <- sample( 1:nrow(g), size = 10000,
+    replace = TRUE, prob = g$probability)
+head(samp)
+
+#Sample from g to calculate some new measures
+g_sample <- g[samp, c("mu", "sigma")]
+
+#Visualize g_sample
+hist(g_sample$mu)
+
+#Calculate the 0.025, 0.5 and 0.975 quantiles
+
+quantile(g_sample$mu, c(0.025, 0.5, .975)) #17.5 mean 95% confidence interval (37.4 - 56.6)
+```
+
+```{r} 
+#calculating the expected population (likelihood) of the next city
+pred_popul <- rnorm(10000, mean = g_sample$mu, 
+                 sd = g_sample$sigma)
+#hist
+hist(pred_popul)
+
+#Calculate the probability of the a city having over 50% of the population - type A. 
+pred_popul <- rnorm(10000, mean=g_sample$mu, sd=g_sample$sigma)
+
+sum(pred_popul >= 50)/length(pred_popul) #34%
+```
+
+
+##comparison
+
+```{r}
+population1 <- c(48.7, 41.2, 31.7, 9.2, 9.3, 19.8, 22.4, 29.6, 30.5, 14.1, 19.8) #north
+population2 <- c(53.9, 74.5, 3.4, 22.4, 2.7, 29.6, 76.7, 57.4, 60.7, 9.3, 14.5) #south
+#mean difference in population
+mean(population1) -  mean(population2)
+
+#Fit the BEST model to the data from both groups
+#library(JAGS)
+#library(BEST)
+m <- BESTmcmc(population1, population2)
+m
+plot(m)
+```
+
