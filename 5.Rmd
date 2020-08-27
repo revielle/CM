@@ -1,0 +1,221 @@
+---
+title: "Untitled"
+author: "Réka Keresztényi"
+date: "August 14, 2020"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#workingdirect.
+setwd("C:/Users/Reka/Desktop/m")
+#libraries
+pacman::p_load(tidyverse,ggplot2,lmerTest,pastecs,dplyr)
+library(brms)
+library(readr)
+library(plyr)
+library(ggplot2)
+library(rethinking)
+library(tidyverse)
+library(rstanarm) 
+library(tidybayes) 
+library(modelr) 
+library(gganimate) 
+library(reshape)
+library(psych)
+
+library("rstan")
+library("devtools")
+#devtools::install_github("stan-dev/cmdstanr")
+#install.packages(c("coda","mvtnorm","devtools","loo","dagitty"))
+#devtools::install_github("rmcelreath/rethinking")
+
+```
+
+```{r}
+
+#data
+data <- read_csv("LaughData.csv")
+describe(data)
+ 
+#data2 <- na.omit(data) #no NA
+#subset + have average Hitrate in both conditons (strangers + friends)
+data2 <- aggregate(data[, 7], list(data$Subject, data$Country, data$Condition, data$Sex), mean)
+data3 <- aggregate(data[, 7], list(data$Country, data$Condition), mean)
+
+colnames(data2) <- c("Subject","Country","Condition","Gender", "Hit")
+colnames(data3) <- c("Country","Condition","Hit")
+
+mydata <- data3
+ggplot(mydata,aes(Hit))+geom_density() #look for prior to explain it
+describe(data3)
+
+plot( Hit ~ Condition , data=data3) + geom_boxplot() #hit rate higher in friends
+ggplot(data3, aes(Condition, Hit,group=Condition)) + geom_boxplot()
+
+#plots
+ggplot(data3, aes(x=Condition, y=Hit, group=Condition)) + 
+  geom_bar(stat='identity') + facet_grid(~Country) + facet_wrap(~ Country)
+
+ggplot(data2, aes(x=Condition, y=Hit, group=Condition)) + 
+  geom_bar(stat='identity')  + facet_grid(~Country) + facet_wrap(~ Country)
+
+#models
+glmer(Hit ~ Condition*Country + (1 + 1Subject))
+
+```
+
+```{r, include=FALSE}
+
+#dependent + independent variables
+mydata$x1 = as.factor(mydata$Condition) 
+mydata$x2 = mydata$Country 
+mydata$y = mydata$Hit
+
+x_lab = "Condition" 
+y_lab = "Hitrate"
+
+```
+
+```{r, include=FALSE}
+
+a_prior = 0.7   
+a_prior_max = 1 
+# get the value of 1 sd by finding the maximum amount our data can vary from the mean (a_prior_max - a_prior) and divide that in half.
+a_sd = (a_prior_max - a_prior) / 2  
+
+#we don't have a strong hypothesi so we set the mean of the effect size parameters to be 0. In the absence of other information, we set the sd to be the same as for the control condition.
+b1_prior = 0  
+b1_sd = a_sd   
+
+```
+
+```{r, include=FALSE}
+
+#generate the prior distribution
+m_prior = stan_glm(y ~ x1*x2, data = mydata,
+  prior_intercept = normal(a_prior, a_sd, autoscale = FALSE),
+  prior = normal(b1_prior, b1_sd, autoscale = FALSE),
+  prior_PD = TRUE
+)
+#check
+pp_check(m_prior)
+precis(m_prior)
+
+# Create the dataframe with fitted draws
+prior_draws = mydata %>% 
+                data_grid(x1, x2) %>% 
+                add_fitted_draws(m_prior, n = 5, seed = 12345) 
+
+#function_plotting
+static_prior_plot_4 = function(prior_draws) {
+  ggplot(prior_draws, aes(x = x1, y = .value, col = x2, fill = x2, group = x2)) +
+    geom_bar(stat='identity', position='dodge') +
+    facet_grid(cols = vars(.draw)) +
+    #facet_wrap(~x2)+
+    theme(strip.background = element_blank(),
+          strip.text.y = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1),
+          plot.title = element_text(hjust = 0.5)) +
+    labs(x=x_lab, y=y_lab) + # axes labels
+    ggtitle("Five sample draws from the priors")
+}
+
+static_prior_plot_4(prior_draws)
+
+ 
+```
+
+Hops visualization:
+
+```{r, include=FALSE}
+
+n_draws = 50 #trialsnr.
+frames_per_second = 2.5 
+# 2.5 frames per second (400ms) is the recommended speed for the HOPs visualization.
+
+# Add more prior draws to the data frame for the visualization
+more_prior_draws <- rbind(
+                mydata %>%
+                data_grid(x1,x2) %>%
+                add_fitted_draws(m_prior, n = n_draws - 5, seed = 12345))
+
+#function
+HOPs_plot_4 = function(data) {
+  ggplot(data, aes(x = x1, y = .value, col = x2, fill = x2, group = x2)) + #do not change
+    geom_bar(stat='identity', position='dodge') + #do not change from stat='identity'. Fill and line aesthetics may be modified here, see ggplot2 documentation
+    transition_states(.draw, transition_length = 1, state_length = 1) + # gganimate code to animate the plots. Do not change
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) + #rotates the x-axis text for readability
+    coord_cartesian(ylim = c(min(mydata$y, na.rm=T), max(mydata$y, na.rm=T))) + # sets axis limits
+    # scale_x_discrete(limits=c("before","after")) + #manually set the order of the x-axis levels
+    labs(x=x_lab, y=y_lab) # axes labels
+}
+
+# this function is defined in 'plotting_functions.R', if you wish to customize the aesthetics.
+prior_HOPs = animate(HOPs_plot_4(more_prior_draws), nframes = n_draws * 2, fps = frames_per_second)
+prior_HOPs
+```
+
+```{r, include=FALSE}
+#posterior
+m = stan_glm(y ~ x1*x2, data = mydata,
+  prior_intercept = normal(a_prior, a_sd, autoscale = FALSE),
+  prior = normal(b1_prior, b1_sd, autoscale = FALSE)
+)
+
+pp_check(m)
+precis(m)
+summary(m, digits=3)
+
+
+
+```
+
+
+Here is a summary of the model fit - Rhat values are very close to 1.0 - implying the model is a good fit for our data. 
+
+For each x position in the fit grid, we can get the posterior mean estimates and 95% credible intervals from the model:
+
+```{r, include=FALSE}
+# Create the dataframe with fitted draws
+fit = mydata %>%#
+      data_grid(x1,x2) %>% 
+      add_fitted_draws(m) %>% 
+      mean_qi(.width = .95) #add 95% credible intervals
+#function
+static_post_plot_4 = function(fit) {
+  ggplot(fit, aes(x = x1, y = .value, fill = x2, group = x2)) +
+    geom_bar(stat='identity', position='dodge') +
+    geom_errorbar(aes(ymin = .lower, ymax = .upper), position = position_dodge(width = .9), width = .2) + 
+    coord_cartesian(ylim = c(min(mydata$y, na.rm=T), max(mydata$y, na.rm=T))) +
+    labs(x=x_lab, y=y_lab)
+}
+
+# Plot the posterior draws
+static_post_plot_4(fit)
+
+```
+
+
+Sampling from the posterior
+To get a better visualization of the uncertainty remaining in the posterior results, we can use animated HOPs for this graph as well. (replace `m_prior` with `m`)
+
+```{r, include=FALSE}
+p = mydata %>% 
+  data_grid(x1, x2) %>% 
+  add_fitted_draws(m, n = n_draws, seed = 12345) 
+post_HOPs = animate(HOPs_plot_4(p), nframes = n_draws * 2, fps = frames_per_second) 
+post_HOPs
+```
+
+Comparing the prior and posterior
+- adding information to the model adds more certainty to our estimates
+
+```{r , include=FALSE}
+prior_HOPs
+post_HOPs
+```
+
+
